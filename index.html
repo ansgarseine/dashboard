@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>ABA Start</title>
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon-192.png">
+<meta name="theme-color" content="#12324F">
+<style>
+:root{
+  --bg:#E9EDF1; --surface:#FFFFFF; --ink:#14212E; --muted:#5B6B7B;
+  --line:#C9D2DB; --brand:#12324F; --signal:#F2B705; --focus:#0B6BCB;
+}
+@media (prefers-color-scheme: dark){
+  :root{ --bg:#0E1822; --surface:#172635; --ink:#E8EEF3; --muted:#93A4B4; --line:#2A3E50; --brand:#0A2237; --focus:#6FB4FF; }
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{
+  background:var(--bg); color:var(--ink);
+  font-family:"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+  min-height:100vh;
+  padding-bottom:env(safe-area-inset-bottom,0);
+}
+header{
+  background:var(--brand); color:#F4F6F8;
+  padding:calc(env(safe-area-inset-top,0px) + 18px) 20px 18px;
+  border-bottom:4px solid var(--signal);
+}
+.bar{max-width:1000px;margin:0 auto;display:flex;align-items:center;gap:12px}
+h1{font-size:1.35rem;margin:0;font-weight:700;letter-spacing:.01em;flex:1}
+.count{font-size:.85rem;opacity:.8}
+button.icon{
+  background:transparent;border:1px solid rgba(255,255,255,.35);color:inherit;
+  border-radius:8px;width:44px;height:44px;font-size:1.2rem;cursor:pointer
+}
+button.icon:active{background:rgba(255,255,255,.15)}
+main{max-width:1000px;margin:0 auto;padding:18px 16px 40px}
+.search{
+  width:100%;padding:14px 16px;font-size:1rem;border-radius:10px;
+  border:1px solid var(--line);background:var(--surface);color:var(--ink);margin-bottom:18px
+}
+:focus-visible{outline:3px solid var(--focus);outline-offset:2px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:14px}
+a.tile{
+  display:flex;flex-direction:column;align-items:center;gap:10px;text-align:center;
+  background:var(--surface);border:1px solid var(--line);border-radius:14px;
+  padding:18px 10px 14px;text-decoration:none;color:var(--ink);min-height:150px;
+  transition:transform .12s, border-color .12s;
+}
+a.tile:hover{border-color:var(--brand)}
+a.tile:active{transform:scale(.97)}
+.ico{
+  width:64px;height:64px;border-radius:14px;background:var(--brand);color:var(--signal);
+  display:grid;place-items:center;font-size:1.8rem;font-weight:700;overflow:hidden
+}
+.ico img{width:100%;height:100%;object-fit:cover;display:block}
+.name{font-weight:600;font-size:.98rem;line-height:1.25;word-break:break-word}
+.sub{font-size:.75rem;color:var(--muted)}
+.status{color:var(--muted);font-size:.9rem;margin:0 0 14px}
+.empty{padding:30px 10px;text-align:center;color:var(--muted)}
+@media (prefers-reduced-motion: reduce){a.tile{transition:none}}
+</style>
+</head>
+<body>
+<header>
+  <div class="bar">
+    <h1>Ansgar’s BestandsAufnahme</h1>
+    <span class="count" id="count"></span>
+    <button class="icon" id="reload" aria-label="Liste aktualisieren" title="Liste aktualisieren">↻</button>
+  </div>
+</header>
+<main>
+  <input class="search" id="q" type="search" placeholder="App suchen" autocomplete="off">
+  <p class="status" id="status"></p>
+  <div class="grid" id="grid"></div>
+</main>
+
+<script>
+/* ====== EINSTELLUNGEN ====== */
+const OWNER = 'ansgarseine';          // GitHub-Benutzername
+const SELF  = 'dashboard';            // Repo-Name dieses Dashboards (wird ausgeblendet)
+const HIDE  = [];                     // Repos, die nicht erscheinen sollen, z.B. ['test','alt-app']
+const EXTRA = [];                     // Zusätzliche Apps von Hand, z.B.
+                                      // { name:'Meine App', url:'https://ansgarseine.github.io/meine-app/' }
+/* ========================== */
+
+const $ = id => document.getElementById(id);
+const CACHE_KEY = 'dashboard.apps.v1';
+const USE_KEY   = 'dashboard.use.v1';
+const safe = fn => { try { return fn(); } catch(e) { return null; } };
+const load = (k, d) => safe(() => JSON.parse(localStorage.getItem(k))) ?? d;
+const save = (k, v) => safe(() => localStorage.setItem(k, JSON.stringify(v)));
+
+let apps = [];
+
+function pretty(repo){
+  return repo.replace(/[-_]+/g,' ').replace(/\b\w/g, c => c.toUpperCase());
+}
+
+async function readManifest(base){
+  try{
+    const r = await fetch(base + 'manifest.json', {cache:'no-cache'});
+    if(!r.ok) return null;
+    return await r.json();
+  }catch(e){ return null; }
+}
+
+async function fetchApps(){
+  const r = await fetch(`https://api.github.com/users/${OWNER}/repos?per_page=100&sort=updated`);
+  if(!r.ok) throw new Error('GitHub antwortet mit Status ' + r.status);
+  const repos = await r.json();
+  const skip = new Set([SELF, `${OWNER}.github.io`, ...HIDE].map(s => s.toLowerCase()));
+  const list = repos.filter(p => !p.fork && !p.archived && p.has_pages && !skip.has(p.name.toLowerCase()));
+  const out = await Promise.all(list.map(async p => {
+    const base = `https://${OWNER}.github.io/${p.name}/`;
+    const m = await readManifest(base);
+    return {
+      id: p.name,
+      name: (m && (m.name || m.short_name)) || pretty(p.name),
+      url: base,
+      icon: base + 'icon-192.png',
+    };
+  }));
+  return out;
+}
+
+function withExtra(list){
+  const have = new Set(list.map(a => a.url));
+  const extra = EXTRA.filter(e => !have.has(e.url)).map(e => ({
+    id: e.url, name: e.name, url: e.url, icon: e.icon || (e.url.replace(/\/?$/,'/') + 'icon-192.png')
+  }));
+  return [...list, ...extra];
+}
+
+function render(){
+  const q = $('q').value.trim().toLowerCase();
+  const use = load(USE_KEY, {});
+  const shown = apps
+    .filter(a => a.name.toLowerCase().includes(q))
+    .sort((a,b) => (use[b.id]||0) - (use[a.id]||0) || a.name.localeCompare(b.name, 'de'));
+  $('count').textContent = apps.length ? apps.length + ' Apps' : '';
+  const g = $('grid'); g.textContent = '';
+  if(!shown.length){
+    g.innerHTML = '<div class="empty">Keine App gefunden.</div>';
+    return;
+  }
+  for(const a of shown){
+    const el = document.createElement('a');
+    el.className = 'tile';
+    el.href = a.url;
+    const ico = document.createElement('div'); ico.className = 'ico';
+    const img = new Image(); img.alt = ''; img.loading = 'lazy'; img.src = a.icon;
+    img.onerror = () => { ico.textContent = a.name.charAt(0).toUpperCase(); };
+    ico.appendChild(img);
+    const nm = document.createElement('div'); nm.className = 'name'; nm.textContent = a.name;
+    el.append(ico, nm);
+    el.addEventListener('click', () => {
+      const u = load(USE_KEY, {}); u[a.id] = (u[a.id]||0) + 1; save(USE_KEY, u);
+    });
+    g.appendChild(el);
+  }
+}
+
+async function refresh(){
+  $('status').textContent = 'Lade App-Liste …';
+  try{
+    const list = await fetchApps();
+    apps = withExtra(list);
+    save(CACHE_KEY, apps);
+    $('status').textContent = '';
+  }catch(e){
+    const cached = load(CACHE_KEY, null);
+    apps = withExtra(cached || []);
+    $('status').textContent = cached
+      ? 'Keine Verbindung zu GitHub – zeige die zuletzt gespeicherte Liste.'
+      : 'Die Liste konnte nicht geladen werden (' + e.message + '). Bitte Verbindung prüfen und ↻ tippen.';
+  }
+  render();
+}
+
+$('q').addEventListener('input', render);
+$('reload').addEventListener('click', refresh);
+
+// Sofort anzeigen, was zuletzt bekannt war, dann im Hintergrund aktualisieren
+apps = withExtra(load(CACHE_KEY, []));
+render();
+refresh();
+
+if('serviceWorker' in navigator){
+  navigator.serviceWorker.register('sw.js').catch(()=>{});
+}
+</script>
+</body>
+</html>
